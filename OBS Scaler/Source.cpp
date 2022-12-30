@@ -6,12 +6,14 @@
 #include <fstream>
 #include <functional>
 
+const std::string app_version = "V1.1";
 const std::string obs_path = "\\obs-studio\\basic\\scenes";
 
 const std::string json_tags[] = {"width", "height", "x", "y" };
 const std::string json_ptags[] = {"pos", "scale", "bounds", "settings" };
 const std::string json_tag_contains = "resolution"; // format: NNNNxNNNN
-const std::string json_ignore_all[] = {"session", "device", "color", "capture", "decode", "encode", "audio", "url", "file", "id", "db", "ratio", "time", "threshold", "frame", "interval", "fps" };
+const std::string json_ignore_all[] = {"active_session_list", "id_counter", "device_id", "color_range", "color_space", "capture", "decode", "reroute_audio", "url", "file", "ratio", "time", "threshold", "frame", "interval", "fps"};
+const std::string json_ignore_all_f[] = {"id", "db"};
 const char ignore_on_check_matchs[][2] = {
 	{' ', '_'}
 };
@@ -20,7 +22,9 @@ std::string getenv_safe(const std::string& env);
 std::string unwrap_backslash(std::string wrk);
 std::string file_name_of(const std::string& pth);
 std::string read_file(const std::string& path);
-void recursive_json_do(nlohmann::json& j, const std::function<void(const std::string&, const std::string&, nlohmann::json&)>& f, const std::string& = {}, const std::string& = {});
+void find_scenes_on(const nlohmann::json& j, std::vector<std::string>& v);
+void find_browsers_on(const nlohmann::json& j, std::vector<std::string>& v);
+void recursive_json_do(nlohmann::json& j, const std::function<void(const std::string&, const std::string&, nlohmann::json&, const uint16_t)>& f, const std::function<uint16_t(const nlohmann::json&)>& avoid_f = [](auto){ return 0; }, const std::string& key = {}, const std::string& pkey = {}, uint16_t flaggd = 0);
 void clear_cin();
 void wait();
 void logstr(const std::string&);
@@ -35,6 +39,7 @@ int main()
 		return 1;
 	}
 
+	logstr("Version: " + app_version);
 	logstr("Any issues please talk to Lohk on:");
 	logstr("Twitter: @lohkdesgds");
 	logstr("Started app.");
@@ -43,6 +48,7 @@ int main()
 	const std::string obs_work = appdata_path + obs_path;// unwrap_backslash(appdata_path + obs_path);
 	std::vector<std::string> files;
 
+	std::cout << "Build: " << app_version << std::endl;
 	std::cout << "Using OBS path: '" << obs_work << "'" << std::endl;
 	std::error_code ec;
 
@@ -84,6 +90,8 @@ int main()
 	nlohmann::json fj; // good
 	std::string newnam; // good
 	std::fstream preopfp; // good
+	std::vector<std::string> scene_names;
+	std::vector<std::string> browser_names;
 
 	do {
 		std::cout << "> ";
@@ -120,18 +128,6 @@ int main()
 			wait();
 			return 1;
 		}
-
-		//recursive_json_do(fj, [](const std::string& pkey, const std::string& key, nlohmann::json& jj) {
-		//	if (
-		//		std::find(std::begin(json_ptags), std::end(json_ptags), pkey) == std::end(json_ptags) &&
-		//		std::find(std::begin(json_tags), std::end(json_tags), key) == std::end(json_tags) && 
-		//		key.find(json_tag_contains) == std::string::npos
-		//	)
-		//		return;
-		//
-		//	std::cout << "Item: " << pkey << " / " << key << " -> " << jj.dump() << std::endl;
-		//});
-
 	}
 
 	logstr("Parsed json successfully.");
@@ -144,18 +140,25 @@ int main()
 		clear_cin();
 		std::getline(std::cin, newnam);
 
-		preopfp.open(obs_work + "\\" + newnam + ".json", std::ios::out | std::ios::binary);
+		std::string newnam_format = newnam;
+		for (auto& i : newnam_format) if (i == ' ') i = '_';
+
+		preopfp.open(obs_work + "\\" + newnam_format + ".json", std::ios::out | std::ios::binary);
 		if (!preopfp || preopfp.bad()) {
 			std::cout << "Bad name, couldn't open file. Please try another name maybe." << std::endl;
 		}
-		else break;
+		else {
+			logstr("Target file name: " + newnam_format);
+			logstr("Target name: " + newnam);
+			break;
+		}
 	}
 
 	logstr("Target file name: " + newnam);
 	
 	{
 		bool got_good = false;
-		recursive_json_do(fj, [&](const std::string& pkey, const std::string& key, nlohmann::json& jj) {
+		recursive_json_do(fj, [&](const std::string& pkey, const std::string& key, nlohmann::json& jj, const uint16_t in_flagged) {
 			if (!got_good && key == "name" && jj.is_string() && is_equal_ignore_auto(jj.get<std::string>(), file_name_src)) {
 				jj = newnam;
 				got_good = true;
@@ -166,6 +169,18 @@ int main()
 			std::cout << "Malformed OBS json file. Could not change scene collection name to " << newnam << " because the JSON key was not found." << std::endl;
 			wait();
 			return 1;
+		}
+
+		find_scenes_on(fj, scene_names);
+		if (scene_names.empty()) {
+			std::cout << "Note: there are no scenes on this file. Exit the app if it sounds wrong." << std::endl;
+			logstr("There were no scenes in the file.");
+		}
+
+		find_browsers_on(fj, browser_names);
+		if (browser_names.empty()) {
+			std::cout << "Note: there are no browsers on this file. Exit the app if it sounds wrong." << std::endl;
+			logstr("There were no browsers in the file.");
 		}
 	}
 
@@ -202,18 +217,6 @@ int main()
 
 	wait();
 
-	//{
-	//	std::string str;
-	//	std::cout << "> ";
-	//	clear_cin();
-	//	std::getline(std::cin, str);
-	//	if (str != "K") {
-	//		std::cout << "Aborted then. Bye." << std::endl;
-	//		wait();
-	//		return 1;
-	//	}
-	//}
-
 	std::cout << "\nDoing it..." << std::endl;	
 	logstr("Started task.");
 
@@ -221,77 +224,119 @@ int main()
 		size_t last_len = 0;
 		std::string outt;
 
-		recursive_json_do(fj, [&](const std::string& pkey, const std::string& key, nlohmann::json& jj) {
-			if (
-				std::find(std::begin(json_ptags), std::end(json_ptags), pkey) == std::end(json_ptags) &&
-				std::find(std::begin(json_tags), std::end(json_tags), key) == std::end(json_tags) && 
-				key.find(json_tag_contains) == std::string::npos
-			)
-				return;
+		recursive_json_do(fj, 
+			[&](const std::string& pkey, const std::string& key, nlohmann::json& jj, const uint16_t in_flagged) {
+				if (
+					std::find(std::begin(json_ptags), std::end(json_ptags), pkey) == std::end(json_ptags) &&
+					std::find(std::begin(json_tags), std::end(json_tags), key) == std::end(json_tags) && 
+					key.find(json_tag_contains) == std::string::npos
+				)
+					return;
 		
-			if (std::find_if(std::begin(json_ignore_all), std::end(json_ignore_all),
-				[&](const std::string& t) { return pkey.find(t) != std::string::npos || key.find(t) != std::string::npos; }
-			) != std::end(json_ignore_all))
-			{
-				logstr("Skipped \"" + pkey + "/" + key + "\": " + jj.dump());
-				//outt = "[DEBUG] Skipped \"" + pkey + "/" + key + "\": " + jj.dump() + ".";
-				//if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
-				//std::cout << outt << std::endl;
-				//last_len = 0;
-				return;
-			}
+				if (std::find_if(std::begin(json_ignore_all), std::end(json_ignore_all),
+					[&](const std::string& t) { return pkey.find(t) != std::string::npos || key.find(t) != std::string::npos; }
+				) != std::end(json_ignore_all))
+				{
+					logstr("Skipped [FIND] \"" + pkey + "/" + key + "\": " + jj.dump());
+					return;
+				}
+				if (std::find_if(std::begin(json_ignore_all_f), std::end(json_ignore_all_f),
+					[&](const std::string& t) { return pkey == t || key == t; }
+				) != std::end(json_ignore_all_f))
+				{
+					logstr("Skipped [FIND] \"" + pkey + "/" + key + "\": " + jj.dump());
+					return;
+				}
 
-			outt = "Working on: " + pkey + "/" + key + " -> " + jj.dump();
-			size_t new_last_len = outt.size();
-			if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
+				// flag 0b10
+				if (in_flagged & 0b10) {
+					logstr("Skipped [FLAG 2] \"" + pkey + "/" + key + "\": " + jj.dump());
+					return;
+				}
+				// flag 0b1
+				if (pkey == "scale" && in_flagged & 0b1) {
 
-			std::cout << outt << "\r";
-			last_len = new_last_len;
+					return;
+					logstr("Skipped [FLAG 1] \"" + pkey + "/" + key + "\": " + jj.dump());
+				}
 
-			switch (jj.type()) {
-			case nlohmann::json::value_t::string:
-			{
-				const std::string jstr = jj.get<std::string>().c_str();
-				if (jstr.find('x') != std::string::npos) {
+				outt = "Working on: " + pkey + "/" + key + " -> " + jj.dump();
+				size_t new_last_len = outt.size();
+				if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
 
-					int nums[2]{};
-					if (sscanf_s(jstr.c_str(), "%dx%d", &nums[0], &nums[1]) != 2) {
-						//outt = "[WARN] Possible issue at \"" + pkey + "/" + key + "\": " + jj.dump() + "!";
-						//if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
-						//std::cout << outt << std::endl;
-						logstr("Possible issue at \"" + pkey + "/" + key + "\": " + jj.dump());
-					}
-					else {
-						jj = std::to_string(static_cast<int64_t>(static_cast<double>(nums[0]) * scaling)) + "x" + std::to_string(static_cast<int64_t>(static_cast<double>(nums[1]) * scaling));
+				std::cout << outt << "\r";
+				last_len = new_last_len;
+
+				switch (jj.type()) {
+				case nlohmann::json::value_t::string:
+				{
+					const std::string jstr = jj.get<std::string>().c_str();
+					if (jstr.find('x') != std::string::npos) {
+
+						int nums[2]{};
+						if (sscanf_s(jstr.c_str(), "%dx%d", &nums[0], &nums[1]) != 2) {
+							logstr("Possible issue at \"" + pkey + "/" + key + "\": " + jj.dump());
+						}
+						else {
+							jj = std::to_string(static_cast<int64_t>(static_cast<double>(nums[0]) * scaling)) + "x" + std::to_string(static_cast<int64_t>(static_cast<double>(nums[1]) * scaling));
+						}
 					}
 				}
+					break;
+				case nlohmann::json::value_t::number_integer:
+				{
+					const auto val = jj.get<int64_t>();
+					const auto fval = static_cast<decltype(val)>(static_cast<double>(val) * scaling);
+					logstr("- Changed \"" + pkey + "/" + key + "\": " + std::to_string(val) + " -> " + std::to_string(fval));
+					jj = fval;
+				}
+				break;
+				case nlohmann::json::value_t::number_unsigned:
+				{
+					const auto val = jj.get<uint64_t>();
+					const auto fval = static_cast<decltype(val)>(static_cast<double>(val) * scaling);
+					logstr("- Changed \"" + pkey + "/" + key + "\": " + std::to_string(val) + " -> " + std::to_string(fval));
+					jj = fval;
+				}
+				break;
+				case nlohmann::json::value_t::number_float:
+				{
+					const auto val = jj.get<float>();
+					const auto fval = static_cast<decltype(val)>(static_cast<double>(val) * scaling);
+					logstr("- Changed \"" + pkey + "/" + key + "\": " + std::to_string(val) + " -> " + std::to_string(fval));
+					jj = fval;
+				}
+				break;
+				default:
+				{
+					//outt = "[WARN] Possible bad type on \"" + pkey + "/" + key + "\": " + jj.dump() + "!";
+					//if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
+					//std::cout << outt << std::endl;
+					//last_len = 0;
+					logstr("Possible bad type on \"" + pkey + "/" + key + "\": " + jj.dump());
+				}
+					break;
+				}
+			},
+			[&scene_names, &browser_names](const nlohmann::json& j) {
+				// scenes should not be scaled/transformed
+				//return false;
+
+				uint16_t flags = 0;
+
+				if ((j.is_object() &&
+					j.contains("scale") && j.contains("rot") && j.contains("visible") && j.contains("name") &&
+					std::find(scene_names.begin(), scene_names.end(), j["name"]) != scene_names.end())
+				) flags |= 0b1;
+
+				if ((j.is_object() &&
+					j.contains("settings") && j.contains("muted") && j.contains("volume") && j.contains("sync") &&
+					std::find(browser_names.begin(), browser_names.end(), j["name"]) != browser_names.end())
+				) flags |= 0b10;
+
+				return flags;
 			}
-				break;
-			case nlohmann::json::value_t::number_integer:
-				if (const auto val = jj.get<int64_t>(); val != 0) //(val < 0 ? -val : val) > 1)
-					jj = static_cast<int64_t>(static_cast<double>(val) * scaling);
-				break;
-			case nlohmann::json::value_t::number_unsigned:
-				if (const auto val = jj.get<uint64_t>(); val != 0) //val > 1)
-					jj = static_cast<uint64_t>(static_cast<double>(val) * scaling);
-				//jj = static_cast<uint64_t>(static_cast<double>(jj.get<uint64_t>()) * scaling);
-				break;
-			case nlohmann::json::value_t::number_float:
-				if (const auto val = jj.get<float>(); val != 0) //(val < 0 ? -val : val) > 1)
-					jj = static_cast<float>(static_cast<double>(val) * scaling);
-				//jj = static_cast<float>(static_cast<double>(jj.get<float>()) * scaling);
-				break;
-			default:
-			{
-				//outt = "[WARN] Possible bad type on \"" + pkey + "/" + key + "\": " + jj.dump() + "!";
-				//if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
-				//std::cout << outt << std::endl;
-				//last_len = 0;
-				logstr("Possible bad type on \"" + pkey + "/" + key + "\": " + jj.dump());
-			}
-				break;
-			}
-		});
+		);
 
 		outt = "Ended working on JSON! Saving file...";
 		if (outt.size() < last_len) outt.append(last_len - outt.size(), ' ');
@@ -355,21 +400,58 @@ std::string read_file(const std::string& path)
 	return out;
 }
 
-void recursive_json_do(nlohmann::json& j, const std::function<void(const std::string&, const std::string&, nlohmann::json&)>& f, const std::string& key, const std::string& pkey)
+void find_scenes_on(const nlohmann::json& j, std::vector<std::string>& v)
 {
-	if (!f) return;
-
-	if (j.is_object()) {
-		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, it.key(), key);
-	}
-	else if (j.is_array()) {
-		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, key, pkey);
-	}
-	else if (j.is_structured()) {
-		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, it.key(), key);
+	if (j.is_object() && j.contains("id") && j.contains("name") && j["id"] == "scene") {
+		v.push_back(j["name"].get<std::string>());
 	}
 	else {
-		f(pkey, key, j);
+		if (j.is_object()) {
+			for (const auto& i : j) find_scenes_on(i, v);
+		}
+		else if (j.is_array()) {
+			for (const auto& i : j) find_scenes_on(i, v);
+		}
+		else if (j.is_structured()) {
+			for (const auto& i : j) find_scenes_on(i, v);
+		}
+	}
+}
+
+void find_browsers_on(const nlohmann::json& j, std::vector<std::string>& v)
+{
+	if (j.is_object() && j.contains("id") && j.contains("name") && j["id"] == "browser_source") {
+		v.push_back(j["name"].get<std::string>());
+	}
+	else {
+		if (j.is_object()) {
+			for (const auto& i : j) find_browsers_on(i, v);
+		}
+		else if (j.is_array()) {
+			for (const auto& i : j) find_browsers_on(i, v);
+		}
+		else if (j.is_structured()) {
+			for (const auto& i : j) find_browsers_on(i, v);
+		}
+	}
+}
+
+void recursive_json_do(nlohmann::json& j, const std::function<void(const std::string&, const std::string&, nlohmann::json&, const uint16_t)>& f, const std::function<uint16_t(const nlohmann::json&)>& avoid_f, const std::string& key, const std::string& pkey, uint16_t flaggd)
+{
+	if (!f || !avoid_f) return;
+	flaggd |= avoid_f(j);
+
+	if (j.is_object()) {
+		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, avoid_f, it.key(), key, flaggd);
+	}
+	else if (j.is_array()) {
+		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, avoid_f, key, pkey, flaggd);
+	}
+	else if (j.is_structured()) {
+		for (auto it = j.begin(); it != j.end(); ++it) recursive_json_do(it.value(), f, avoid_f, it.key(), key, flaggd);
+	}
+	else {
+		f(pkey, key, j, flaggd);
 	}
 	//std::cout << "\r" << key << "    ";
 }
